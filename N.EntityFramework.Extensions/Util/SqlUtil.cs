@@ -3,11 +3,34 @@ using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
 using System.Data.SqlClient;
+using System.Linq;
 
 namespace N.EntityFramework.Extensions
 {
+    internal class StringIgnoreCaseEqualityComparer : IEqualityComparer<string>
+    {
+        public bool Equals(string x, string y)
+            => string.Equals(x, y, StringComparison.OrdinalIgnoreCase);
+
+        public int GetHashCode(string obj)
+            => obj.GetHashCode();
+    }
+
     internal static class SqlUtil
     {
+        static SqlUtil()
+        {
+            StringIgnoreCaseEqualityComparer = new StringIgnoreCaseEqualityComparer();
+            var reservedKeywords = "ADD,EXTERNAL,PROCEDURE,ALL,FETCH,PUBLIC,ALTER,FILE,RAISERROR,AND,FILLFACTOR,READ,ANY,FOR,READTEXT,AS,FOREIGN,RECONFIGURE,ASC,FREETEXT,REFERENCES,AUTHORIZATION,FREETEXTTABLE,REPLICATION,BACKUP,FROM,RESTORE,BEGIN,FULL,RESTRICT,BETWEEN,FUNCTION,RETURN,BREAK,GOTO,REVERT,BROWSE,GRANT,REVOKE,BULK,GROUP,RIGHT,BY,HAVING,ROLLBACK,CASCADE,HOLDLOCK,ROWCOUNT,CASE,IDENTITY,ROWGUIDCOL,CHECK,IDENTITY_INSERT,RULE,CHECKPOINT,IDENTITYCOL,SAVE,CLOSE,IF,SCHEMA,CLUSTERED,IN,SECURITYAUDIT,COALESCE,INDEX,SELECT,COLLATE,INNER,SEMANTICKEYPHRASETABLE,COLUMN,INSERT,SEMANTICSIMILARITYDETAILSTABLE,COMMIT,INTERSECT,SEMANTICSIMILARITYTABLE,COMPUTE,INTO,SESSION_USER,CONSTRAINT,IS,SET,CONTAINS,JOIN,SETUSER,CONTAINSTABLE,KEY,SHUTDOWN,CONTINUE,KILL,SOME,CONVERT,LEFT,STATISTICS,CREATE,LIKE,SYSTEM_USER,CROSS,LINENO,TABLE,CURRENT,LOAD,TABLESAMPLE,CURRENT_DATE,MERGE,TEXTSIZE,CURRENT_TIME,NATIONAL,THEN,CURRENT_TIMESTAMP,NOCHECK,TO,CURRENT_USER,NONCLUSTERED,TOP,CURSOR,NOT,TRAN,DATABASE,NULL,TRANSACTION,DBCC,NULLIF,TRIGGER,DEALLOCATE,OF,TRUNCATE,DECLARE,OFF,TRY_CONVERT,DEFAULT,OFFSETS,TSEQUAL,DELETE,ON,UNION,DENY,OPEN,UNIQUE,DESC,OPENDATASOURCE,UNPIVOT,DISK,OPENQUERY,UPDATE,DISTINCT,OPENROWSET,UPDATETEXT,DISTRIBUTED,OPENXML,USE,DOUBLE,OPTION,USER,DROP,OR,VALUES,DUMP,ORDER,VARYING,ELSE,OUTER,VIEW,END,OVER,WAITFOR,ERRLVL,PERCENT,WHEN,ESCAPE,PIVOT,WHERE,EXCEPT,PLAN,WHILE,EXEC,PRECISION,WITH,EXECUTE,PRIMARY,WITHIN GROUP,EXISTS,PRINT,WRITETEXT,EXIT,PROC";
+            ReservedKeywords = reservedKeywords
+                .Split(new[] { "," }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(item => item.Trim())
+                .ToArray();
+        }
+
+        internal static string[] ReservedKeywords;
+        internal static StringIgnoreCaseEqualityComparer StringIgnoreCaseEqualityComparer;
+
         internal static int ExecuteSql(string query, SqlConnection connection, SqlTransaction transaction, int? commandTimeout = null)
         {
             return SqlUtil.ExecuteSql(query, connection, transaction, null, commandTimeout);
@@ -40,13 +63,14 @@ namespace N.EntityFramework.Extensions
         }
         internal static int CloneTable(string sourceTable, string destinationTable, string[] columnNames, SqlConnection connection, SqlTransaction transaction, string internalIdColumnName=null)
         {
-            string columns = columnNames != null && columnNames.Length > 0 ? string.Join(",", columnNames) : "*";
+            string columns = columnNames != null && columnNames.Length > 0 ? ConvertToColumnString(columnNames) : "*";
             columns = !string.IsNullOrEmpty(internalIdColumnName) ? string.Format("{0},CAST( NULL AS INT) AS {1}",columns, internalIdColumnName) : columns;
             return ExecuteSql(string.Format("SELECT TOP 0 {0} INTO {1} FROM {2}", columns, destinationTable, sourceTable), connection, transaction, null);
         }
         internal static string ConvertToColumnString(IEnumerable<string> columnNames)
         {
-            return string.Join(",", columnNames);
+            var fixedColumnNames = columnNames.Select(item => ReservedKeywords.Contains(item, StringIgnoreCaseEqualityComparer) ? $"[{item}]" : item).ToArray();
+            return string.Join(",", fixedColumnNames);
         }
         internal static int ToggleIdentityInsert(bool enable, string tableName, SqlConnection dbConnection, SqlTransaction dbTransaction)
         {

@@ -92,87 +92,105 @@ namespace N.EntityFramework.Extensions
         {
             return context.BulkInsert<T>(entities, optionsAction.Build());
         }
+
+        public static int MyBulkInsert<T>(this DbContext context, List<object> entities, object options)
+        {
+            var castedEntities = entities.Cast<T>().ToList();
+            var castedOptions = options as BulkInsertOptions<T>;
+
+            return BulkInsert(context, castedEntities, castedOptions);
+        }
+
         public static int BulkInsert<T>(this DbContext context, IEnumerable<T> entities, BulkInsertOptions<T> options)
         {
             int rowsAffected = 0;
             var tableMapping = context.GetTableMapping(typeof(T));
             var dbConnection = context.GetSqlConnection();
-
             if (dbConnection.State == ConnectionState.Closed)
-                dbConnection.Open();
-
-            using (var transaction = dbConnection.BeginTransaction())
             {
-                try
+                dbConnection.Open();
+            }    
+
+            var transaction = context.Database.CurrentTransaction.UnderlyingTransaction as SqlTransaction;
+            
+            string stagingTableName = GetStagingTableName(tableMapping, options.UsePermanentTable, dbConnection);
+            string destinationTableName = string.Format("[{0}].[{1}]", tableMapping.Schema, tableMapping.TableName);
+            string[] columnNames = tableMapping.Columns
+                .Select(o => o.Column.Name)
+                .ToArray();
+            if (options.IgnoreColumns?.Any() == true)
+            {
+                columnNames = columnNames.Where(item => !options.IgnoreColumns.Contains(item, SqlUtil.StringIgnoreCaseEqualityComparer)).ToArray();
+            }
+
+            string[] storeGeneratedColumnNames = tableMapping.Columns
+                .Where(o => o.Column.IsStoreGeneratedIdentity || o.Column.IsStoreGeneratedComputed)
+                .Select(o => o.Column.Name).ToArray();
+
+            SqlUtil.CloneTable(destinationTableName, stagingTableName, null, dbConnection, transaction, Common.Constants.InternalId_ColumnName);
+            var bulkInsertResult = BulkInsert(
+                entities,
+                options,
+                tableMapping,
+                dbConnection,
+                transaction,
+                stagingTableName,
+                columnNames,
+                SqlBulkCopyOptions.KeepIdentity,
+                true);
+
+            IEnumerable<string> columnsToInsert = columnNames;
+
+            List<string> columnsToOutput = new List<string> { "$Action", string.Format("{0}.{1}", "s", Constants.InternalId_ColumnName) };
+            List<PropertyInfo> propertySetters = new List<PropertyInfo>();
+            Type entityType = typeof(T);
+
+            foreach (var storeGeneratedColumnName in storeGeneratedColumnNames)
+            {
+                columnsToOutput.Add(string.Format("inserted.[{0}]", storeGeneratedColumnName));
+                propertySetters.Add(entityType.GetProperty(storeGeneratedColumnName));
+            }
+
+            string insertSqlText = string.Format("MERGE {0} t USING {1} s ON {2} WHEN NOT MATCHED THEN INSERT ({3}) VALUES ({3}){4};",
+                destinationTableName,
+                stagingTableName,
+                options.InsertIfNotExists ? CommonUtil<T>.GetJoinConditionSql(options.InsertOnCondition, storeGeneratedColumnNames, "t", "s") : "1=2",
+                SqlUtil.ConvertToColumnString(columnsToInsert),
+                columnsToOutput.Count > 0 ? " OUTPUT " + SqlUtil.ConvertToColumnString(columnsToOutput) : "");
+
+            if (options.KeepIdentity)
+            {
+                SqlUtil.ToggleIdentityInsert(true, destinationTableName, dbConnection, transaction);
+            }
+            var bulkQueryResult = context.BulkQuery(insertSqlText, dbConnection, transaction, options);
+            if (options.KeepIdentity)
+            {
+                SqlUtil.ToggleIdentityInsert(false, destinationTableName, dbConnection, transaction);
+            }
+            rowsAffected = bulkQueryResult.RowsAffected;
+
+            if (options.AutoMapOutputIdentity)
+            {
+                if (rowsAffected == entities.Count())
                 {
-                    string stagingTableName = GetStagingTableName(tableMapping, options.UsePermanentTable, dbConnection);
-                    string destinationTableName = string.Format("[{0}].[{1}]", tableMapping.Schema, tableMapping.TableName);
-                    string[] columnNames = tableMapping.Columns.Where(o => options.KeepIdentity || !o.Column.IsStoreGeneratedIdentity).Select(o => o.Column.Name).ToArray();
-                    string[] storeGeneratedColumnNames = tableMapping.Columns.Where(o => o.Column.IsStoreGeneratedIdentity).Select(o => o.Column.Name).ToArray();
-
-                    SqlUtil.CloneTable(destinationTableName, stagingTableName, null, dbConnection, transaction, Common.Constants.InternalId_ColumnName);
-                    var bulkInsertResult = BulkInsert(entities, options, tableMapping, dbConnection, transaction, stagingTableName, null, SqlBulkCopyOptions.KeepIdentity, true);
-
-                    IEnumerable<string> columnsToInsert = columnNames;
-
-                    List<string> columnsToOutput = new List<string> { "$Action", string.Format("{0}.{1}", "s", Constants.InternalId_ColumnName) };
-                    List<PropertyInfo> propertySetters = new List<PropertyInfo>();
-                    Type entityType = typeof(T);
-
-                    foreach (var storeGeneratedColumnName in storeGeneratedColumnNames)
+                    //var entityIndex = 1;
+                    foreach (var result in bulkQueryResult.Results)
                     {
-                        columnsToOutput.Add(string.Format("inserted.[{0}]", storeGeneratedColumnName));
-                        propertySetters.Add(entityType.GetProperty(storeGeneratedColumnName));
-                    }
-
-                    string insertSqlText = string.Format("MERGE {0} t USING {1} s ON {2} WHEN NOT MATCHED THEN INSERT ({3}) VALUES ({3}){4};",
-                        destinationTableName, 
-                        stagingTableName,
-                        options.InsertIfNotExists ? CommonUtil<T>.GetJoinConditionSql(options.InsertOnCondition, storeGeneratedColumnNames, "t", "s") : "1=2",
-                        SqlUtil.ConvertToColumnString(columnsToInsert),
-                        columnsToOutput.Count > 0 ? " OUTPUT " + SqlUtil.ConvertToColumnString(columnsToOutput) : "");
-
-                    if(options.KeepIdentity)
-                        SqlUtil.ToggleIdentityInsert(true, destinationTableName, dbConnection, transaction);
-                    var bulkQueryResult = context.BulkQuery(insertSqlText, dbConnection, transaction, options);
-                    if (options.KeepIdentity)
-                        SqlUtil.ToggleIdentityInsert(false, destinationTableName, dbConnection, transaction);
-                    rowsAffected = bulkQueryResult.RowsAffected;
-
-                    if (options.AutoMapOutputIdentity)
-                    {
-                        if (rowsAffected == entities.Count())
+                        int entityId = (int)result[1];
+                        var entity = bulkInsertResult.EntityMap[entityId];
+                        for (int i = 2; i < columnsToOutput.Count; i++)
                         {
-                            //var entityIndex = 1;
-                            foreach(var result in bulkQueryResult.Results)
-                            {
-                                int entityId = (int)result[1];
-                                var entity = bulkInsertResult.EntityMap[entityId];
-                                for (int i = 2; i < columnsToOutput.Count; i++)
-                                {
-                                    propertySetters[2-i].SetValue(entity, result[i]);
-                                }
-                            }
+                            propertySetters[i-2].SetValue(entity, result[i]);
                         }
                     }
-
-                    SqlUtil.DeleteTable(stagingTableName, dbConnection, transaction);
-
-                    //ClearEntityStateToUnchanged(context, entities);
-                    transaction.Commit();
-                    return rowsAffected;
                 }
-                catch (Exception)
-                {
-                    transaction.Rollback();
-                    throw;
-                }
-                finally
-                {
-                    dbConnection.Close();
-                }
-
             }
+
+            SqlUtil.DeleteTable(stagingTableName, dbConnection, transaction);
+
+            ClearEntityStateToUnchanged(context, entities);
+            
+            return rowsAffected;
         }
 
         private static BulkInsertResult<T> BulkInsert<T>(IEnumerable<T> entities, BulkOptions options, TableMapping tableMapping, SqlConnection dbConnection, SqlTransaction transaction, string tableName,
