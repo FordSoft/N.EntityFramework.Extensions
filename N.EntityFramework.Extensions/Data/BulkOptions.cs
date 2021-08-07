@@ -12,5 +12,6 @@ namespace N.EntityFramework.Extensions
         public bool UsePermanentTable { get; set; }
         public string TableName { get; set; }
         public int? CommandTimeout { get; set; }
+        public string[] IgnoreColumns { get; set; }
     }
 }

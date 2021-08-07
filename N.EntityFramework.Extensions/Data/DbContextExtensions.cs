@@ -1,23 +1,20 @@
-﻿using N.EntityFramework.Extensions.Common;
-using N.EntityFramework.Extensions.Extensions;
-using N.EntityFramework.Extensions.Sql;
-using N.EntityFramework.Extensions.Util;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Data;
-using System.Data.Common;
 using System.Data.Entity;
 using System.Data.Entity.Core.Mapping;
 using System.Data.Entity.Core.Metadata.Edm;
 using System.Data.Entity.Infrastructure;
 using System.Data.Entity.Infrastructure.Interception;
 using System.Data.SqlClient;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
-using System.Text;
+using N.EntityFramework.Extensions.Common;
+using N.EntityFramework.Extensions.Extensions;
+using N.EntityFramework.Extensions.Sql;
+using N.EntityFramework.Extensions.Util;
 
 namespace N.EntityFramework.Extensions
 {
@@ -56,12 +53,12 @@ namespace N.EntityFramework.Extensions
                     string[] keyColumnNames = options.DeleteOnCondition != null ? CommonUtil<T>.GetColumns(options.DeleteOnCondition, new[] { "s" }) 
                         : tableMapping.Columns.Where(o => o.Column.IsStoreGeneratedIdentity).Select(o => o.Column.Name).ToArray();
 
-                    SqlUtil.CloneTable(destinationTableName, stagingTableName, keyColumnNames, dbConnection, transaction);
+                    SqlUtil.CloneTable(destinationTableName, stagingTableName, keyColumnNames, dbConnection, transaction, null, options.CommandTimeout);
                     BulkInsert(entities, options, tableMapping, dbConnection, transaction, stagingTableName, keyColumnNames, SqlBulkCopyOptions.KeepIdentity);
                     string deleteSql = string.Format("DELETE t FROM {0} s JOIN {1} t ON {2}", stagingTableName, destinationTableName, 
                         CommonUtil<T>.GetJoinConditionSql(options.DeleteOnCondition, keyColumnNames));
                     rowsAffected = SqlUtil.ExecuteSql(deleteSql, dbConnection, transaction, options.CommandTimeout);
-                    SqlUtil.DeleteTable(stagingTableName, dbConnection, transaction);
+                    SqlUtil.DeleteTable(stagingTableName, dbConnection, transaction, options.CommandTimeout);
                     transaction.Commit();
                 }
                 catch (Exception)
@@ -94,23 +91,14 @@ namespace N.EntityFramework.Extensions
         }
 
         public static int MyBulkInsert<T>(this DbContext context, List<object> entities, object options)
-        {
-            var castedEntities = entities.Cast<T>().ToList();
-            var castedOptions = options as BulkInsertOptions<T>;
-
-            return BulkInsert(context, castedEntities, castedOptions);
-        }
+            => BulkInsert(context, entities.Cast<T>(), options as BulkInsertOptions<T>);
 
         public static int BulkInsert<T>(this DbContext context, IEnumerable<T> entities, BulkInsertOptions<T> options)
         {
             int rowsAffected = 0;
             var tableMapping = context.GetTableMapping(typeof(T));
             var dbConnection = context.GetSqlConnection();
-            if (dbConnection.State == ConnectionState.Closed)
-            {
-                dbConnection.Open();
-            }    
-
+            
             var transaction = context.Database.CurrentTransaction.UnderlyingTransaction as SqlTransaction;
             
             string stagingTableName = GetStagingTableName(tableMapping, options.UsePermanentTable, dbConnection);
@@ -122,12 +110,18 @@ namespace N.EntityFramework.Extensions
             {
                 columnNames = columnNames.Where(item => !options.IgnoreColumns.Contains(item, SqlUtil.StringIgnoreCaseEqualityComparer)).ToArray();
             }
-
             string[] storeGeneratedColumnNames = tableMapping.Columns
                 .Where(o => o.Column.IsStoreGeneratedIdentity || o.Column.IsStoreGeneratedComputed)
                 .Select(o => o.Column.Name).ToArray();
 
-            SqlUtil.CloneTable(destinationTableName, stagingTableName, null, dbConnection, transaction, Common.Constants.InternalId_ColumnName);
+            SqlUtil.CloneTable(
+                destinationTableName, 
+                stagingTableName, 
+                null, 
+                dbConnection, 
+                transaction, 
+                Common.Constants.InternalId_ColumnName,
+                options.CommandTimeout);
             var bulkInsertResult = BulkInsert(
                 entities,
                 options,
@@ -186,7 +180,7 @@ namespace N.EntityFramework.Extensions
                 }
             }
 
-            SqlUtil.DeleteTable(stagingTableName, dbConnection, transaction);
+            SqlUtil.DeleteTable(stagingTableName, dbConnection, transaction, options.CommandTimeout);
 
             ClearEntityStateToUnchanged(context, entities);
             
@@ -269,7 +263,14 @@ namespace N.EntityFramework.Extensions
                     string[] columnNames = tableMapping.Columns.Where(o => !o.Column.IsStoreGeneratedIdentity).Select(o => o.Column.Name).ToArray();
                     string[] storeGeneratedColumnNames = tableMapping.Columns.Where(o => o.Column.IsStoreGeneratedIdentity).Select(o => o.Column.Name).ToArray();
 
-                    SqlUtil.CloneTable(destinationTableName, stagingTableName, null, dbConnection, transaction, Common.Constants.InternalId_ColumnName);
+                    SqlUtil.CloneTable(
+                        destinationTableName, 
+                        stagingTableName, 
+                        null, 
+                        dbConnection, 
+                        transaction, 
+                        Common.Constants.InternalId_ColumnName,
+                        options.CommandTimeout);
                     var bulkInsertResult = BulkInsert(entities, options, tableMapping, dbConnection, transaction, stagingTableName, null, SqlBulkCopyOptions.KeepIdentity, true);
 
                     IEnumerable<string> columnsToInsert = columnNames.Where(o => !options.GetIgnoreColumnsOnInsert().Contains(o));
@@ -326,7 +327,7 @@ namespace N.EntityFramework.Extensions
                         else if (action == SqlMergeAction.Update) rowsUpdated++;
                         else if (action == SqlMergeAction.Delete) rowsDeleted++;
                     }
-                    SqlUtil.DeleteTable(stagingTableName, dbConnection, transaction);
+                    SqlUtil.DeleteTable(stagingTableName, dbConnection, transaction, options.CommandTimeout);
 
                     //ClearEntityStateToUnchanged(context, entities);
                     transaction.Commit();
@@ -378,7 +379,14 @@ namespace N.EntityFramework.Extensions
                     string[] columnNames = tableMapping.Columns.Where(o => !o.Column.IsStoreGeneratedIdentity).Select(o => o.Column.Name).ToArray();
                     string[] storeGeneratedColumnNames = tableMapping.Columns.Where(o => o.Column.IsStoreGeneratedIdentity).Select(o => o.Column.Name).ToArray();
 
-                    SqlUtil.CloneTable(destinationTableName, stagingTableName, null, dbConnection, transaction);
+                    SqlUtil.CloneTable(
+                        destinationTableName, 
+                        stagingTableName, 
+                        null, 
+                        dbConnection, 
+                        transaction,
+                        null,
+                        options.CommandTimeout);
                     BulkInsert(entities, options, tableMapping, dbConnection, transaction, stagingTableName, null, SqlBulkCopyOptions.KeepIdentity);
 
                     IEnumerable<string> columnstoUpdate = columnNames.Where(o => !options.IgnoreColumnsOnUpdate.GetObjectProperties().Contains(o));
@@ -388,7 +396,7 @@ namespace N.EntityFramework.Extensions
                         updateSetExpression, stagingTableName, destinationTableName, CommonUtil<T>.GetJoinConditionSql(options.UpdateOnCondition, storeGeneratedColumnNames, "s", "t"));
 
                     rowsUpdated = SqlUtil.ExecuteSql(updateSql, dbConnection, transaction, options.CommandTimeout);
-                    SqlUtil.DeleteTable(stagingTableName, dbConnection, transaction);
+                    SqlUtil.DeleteTable(stagingTableName, dbConnection, transaction, options.CommandTimeout);
 
                     //ClearEntityStateToUnchanged(context, entities);
                     transaction.Commit();
@@ -405,6 +413,67 @@ namespace N.EntityFramework.Extensions
 
                 return rowsUpdated;
             }
+        }
+
+        public static int BulkUpdateCasted<T>(this DbContext context, List<object> entities, object options)
+            => MyBulkUpdate(context, entities.Cast<T>(), options as BulkUpdateOptions<T>);
+
+        private static int MyBulkUpdate<T>(this DbContext context, IEnumerable<T> entities, BulkUpdateOptions<T> options)
+        {
+            int rowsUpdated = 0;
+            var outputRows = new List<BulkMergeOutputRow<T>>();
+            var tableMapping = context.GetTableMapping(typeof(T));
+            var dbConnection = context.GetSqlConnection();
+
+            var transaction = context.Database.CurrentTransaction.UnderlyingTransaction as SqlTransaction;
+
+            string stagingTableName = GetStagingTableName(tableMapping, options.UsePermanentTable, dbConnection);
+            string destinationTableName = string.Format("[{0}].[{1}]", tableMapping.Schema, tableMapping.TableName);
+            
+			// TODO
+            //
+            //string[] columnNames = tableMapping.Columns.Where(o => !o.Column.IsStoreGeneratedIdentity).Select(o => o.Column.Name).ToArray();
+            string[] columnNames = tableMapping.Columns
+                .Select(o => o.Column.Name)
+                .ToArray();
+            if (options.IgnoreColumns?.Any() == true)
+            {
+                columnNames = columnNames.Where(item => !options.IgnoreColumns.Contains(item, SqlUtil.StringIgnoreCaseEqualityComparer)).ToArray();
+            }
+
+
+            // TODO
+            //
+            //string[] storeGeneratedColumnNames = tableMapping.Columns.Where(o => o.Column.IsStoreGeneratedIdentity).Select(o => o.Column.Name).ToArray();
+            string[] storeGeneratedColumnNames =
+                new[] { "Id" };
+                //tableMapping.Columns
+                //.Where(o => o.Column.IsStoreGeneratedIdentity || o.Column.IsStoreGeneratedComputed)
+                //.Select(o => o.Column.Name).ToArray();
+
+            SqlUtil.CloneTable(
+                destinationTableName, 
+                stagingTableName, 
+                null, 
+                dbConnection, 
+                transaction,
+                null,
+                options.CommandTimeout);
+            BulkInsert(entities, options, tableMapping, dbConnection, transaction, stagingTableName, null, SqlBulkCopyOptions.KeepIdentity);
+
+            IEnumerable<string> columnstoUpdate = SqlUtil.ReplaceReservedKeywords(
+                columnNames.Where(o => !options.IgnoreColumnsOnUpdate.GetObjectProperties().Contains(o)));
+
+            string updateSetExpression = string.Join(",", columnstoUpdate.Select(o => string.Format("t.{0}=s.{0}", o)));
+            string updateSql = string.Format("UPDATE t SET {0} FROM {1} AS s JOIN {2} AS t ON {3}; SELECT @@RowCount;",
+                updateSetExpression, stagingTableName, destinationTableName, CommonUtil<T>.GetJoinConditionSql(options.UpdateOnCondition, storeGeneratedColumnNames, "s", "t"));
+
+            rowsUpdated = SqlUtil.ExecuteSql(updateSql, dbConnection, transaction, options.CommandTimeout);
+            SqlUtil.DeleteTable(stagingTableName, dbConnection, transaction, options.CommandTimeout);
+
+            ClearEntityStateToUnchanged(context, entities);
+
+            return rowsUpdated;
         }
         public static void Fetch<T>(this IQueryable<T> querable, Action<FetchResult<T>> action, Action<FetchOptions> optionsAction) where T : class, new()
         {
@@ -469,7 +538,10 @@ namespace N.EntityFramework.Extensions
             {
                 var entry = dbContext.Entry(entity);
                 if (entry.State == EntityState.Added || entry.State == EntityState.Modified)
-                    dbContext.Entry(entity).State = EntityState.Unchanged;
+                {
+                    dbContext.Entry(entity).State = EntityState.Detached;
+                    dbContext.Set(entity.GetType()).Attach(entity);
+                }
             }
             dbContext.Configuration.AutoDetectChangesEnabled = autoDetectCahngesEnabled;
         }

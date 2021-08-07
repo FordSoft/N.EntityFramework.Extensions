@@ -7,14 +7,6 @@ using System.Linq;
 
 namespace N.EntityFramework.Extensions
 {
-    internal class StringIgnoreCaseEqualityComparer : IEqualityComparer<string>
-    {
-        public bool Equals(string x, string y)
-            => string.Equals(x, y, StringComparison.OrdinalIgnoreCase);
-
-        public int GetHashCode(string obj)
-            => obj.GetHashCode();
-    }
 
     internal static class SqlUtil
     {
@@ -31,47 +23,76 @@ namespace N.EntityFramework.Extensions
         internal static string[] ReservedKeywords;
         internal static StringIgnoreCaseEqualityComparer StringIgnoreCaseEqualityComparer;
 
-        internal static int ExecuteSql(string query, SqlConnection connection, SqlTransaction transaction, int? commandTimeout = null)
+        internal static int ExecuteSql(string query, SqlConnection connection, SqlTransaction transaction, int? commandTimeout)
         {
             return SqlUtil.ExecuteSql(query, connection, transaction, null, commandTimeout);
         }
-        internal static int ExecuteSql(string query, SqlConnection connection, SqlTransaction transaction, object[] parameters = null, int? commandTimeout=null)
+
+        internal static int ExecuteSql(string query, SqlConnection connection, SqlTransaction transaction, object[] parameters = null, int? commandTimeout = null)
         {
-            var sqlCommand = new SqlCommand(query, connection, transaction);
-            if (connection.State == ConnectionState.Closed)
-                connection.Open();
-            if (commandTimeout.HasValue)
-                sqlCommand.CommandTimeout = commandTimeout.Value;
-            if (parameters != null)
-                sqlCommand.Parameters.AddRange(parameters);
-            return sqlCommand.ExecuteNonQuery();
+            using (var sqlCommand = new SqlCommand(query, connection, transaction))
+            {
+                if (commandTimeout.HasValue)
+                {
+                    sqlCommand.CommandTimeout = commandTimeout.Value;
+                }
+                else
+                {
+
+                }
+
+                if (parameters != null)
+                {
+                    sqlCommand.Parameters.AddRange(parameters);
+                }
+
+                return sqlCommand.ExecuteNonQuery();
+            }
         }
+
         internal static object ExecuteScalar(string query, SqlConnection connection, SqlTransaction transaction, object[] parameters = null, int? commandTimeout = null)
         {
-            var sqlCommand = new SqlCommand(query, connection, transaction);
-            if (connection.State == ConnectionState.Closed)
-                connection.Open();
-            if (commandTimeout.HasValue)
-                sqlCommand.CommandTimeout = commandTimeout.Value;
-            if(parameters != null)
-                sqlCommand.Parameters.AddRange(parameters);
-            return sqlCommand.ExecuteScalar();
+            using(var sqlCommand = new SqlCommand(query, connection, transaction))
+            {
+                if (commandTimeout.HasValue)
+                {
+                    sqlCommand.CommandTimeout = commandTimeout.Value;
+                }    
+                if (parameters != null)
+                {
+
+                    sqlCommand.Parameters.AddRange(parameters);
+                }
+                return sqlCommand.ExecuteScalar();
+            }
         }
-        internal static int DeleteTable(string tableName, SqlConnection connection, SqlTransaction transaction)
+
+        internal static int DeleteTable(string tableName, SqlConnection connection, SqlTransaction transaction, int? commandTimeout = null)
         {
-            return ExecuteSql(string.Format("DROP TABLE {0}", tableName), connection, transaction, null);
+            return ExecuteSql(string.Format("DROP TABLE {0}", tableName), connection, transaction, commandTimeout);
         }
-        internal static int CloneTable(string sourceTable, string destinationTable, string[] columnNames, SqlConnection connection, SqlTransaction transaction, string internalIdColumnName=null)
+        internal static int CloneTable(
+            string sourceTable, 
+            string destinationTable, 
+            string[] columnNames, 
+            SqlConnection connection, 
+            SqlTransaction transaction, 
+            string internalIdColumnName = null,
+            int? commandTimeout = null)
         {
             string columns = columnNames != null && columnNames.Length > 0 ? ConvertToColumnString(columnNames) : "*";
             columns = !string.IsNullOrEmpty(internalIdColumnName) ? string.Format("{0},CAST( NULL AS INT) AS {1}",columns, internalIdColumnName) : columns;
-            return ExecuteSql(string.Format("SELECT TOP 0 {0} INTO {1} FROM {2}", columns, destinationTable, sourceTable), connection, transaction, null);
+            return ExecuteSql(string.Format("SELECT TOP 0 {0} INTO {1} FROM {2}", columns, destinationTable, sourceTable), connection, transaction, commandTimeout);
         }
         internal static string ConvertToColumnString(IEnumerable<string> columnNames)
         {
-            var fixedColumnNames = columnNames.Select(item => ReservedKeywords.Contains(item, StringIgnoreCaseEqualityComparer) ? $"[{item}]" : item).ToArray();
+            var fixedColumnNames = ReplaceReservedKeywords(columnNames);
             return string.Join(",", fixedColumnNames);
         }
+
+        internal static IEnumerable<string> ReplaceReservedKeywords(IEnumerable<string> columnNames) =>
+            columnNames.Select(item => ReservedKeywords.Contains(item, StringIgnoreCaseEqualityComparer) ? $"[{item}]" : item);
+
         internal static int ToggleIdentityInsert(bool enable, string tableName, SqlConnection dbConnection, SqlTransaction dbTransaction)
         {
             string boolString = enable ? "ON" : "OFF";
