@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
 using System.Data.SqlClient;
+using System.Diagnostics;
 using System.Linq;
 
 namespace N.EntityFramework.Extensions
@@ -80,9 +81,22 @@ namespace N.EntityFramework.Extensions
             string internalIdColumnName = null,
             int? commandTimeout = null)
         {
+
+#if CHECK_PERFOMANCE
+            var stopwatch = Stopwatch.StartNew();
+            DbContextExtensions.LogToDebug($"Start clone table. Source table name '{sourceTable}', destination table name '{destinationTable}'");
+#endif
+
             string columns = columnNames != null && columnNames.Length > 0 ? ConvertToColumnString(columnNames) : "*";
             columns = !string.IsNullOrEmpty(internalIdColumnName) ? string.Format("{0},CAST( NULL AS INT) AS {1}",columns, internalIdColumnName) : columns;
-            return ExecuteSql(string.Format("SELECT TOP 0 {0} INTO {1} FROM {2}", columns, destinationTable, sourceTable), connection, transaction, commandTimeout);
+
+            var result = ExecuteSql(string.Format("SELECT TOP 0 {0} INTO {1} FROM {2}", columns, destinationTable, sourceTable), connection, transaction, commandTimeout);
+
+#if CHECK_PERFOMANCE
+            DbContextExtensions.LogToDebug($"Finished clone table. Source table name '{sourceTable}', destination table name '{destinationTable}'", stopwatch.Elapsed);
+#endif
+            return result;
+
         }
         internal static string ConvertToColumnString(IEnumerable<string> columnNames)
         {
