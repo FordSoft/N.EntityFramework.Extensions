@@ -607,7 +607,23 @@ namespace N.EntityFramework.Extensions
                     var entry = dbContext.Entry(entity);
                     if (entry.State == EntityState.Added || entry.State == EntityState.Modified)
                     {
-                        entry.State = EntityState.Detached;
+                        switch (entry.State)
+                        {
+                            case EntityState.Added:
+                            case EntityState.Deleted:
+                                {
+                                    entry.State = EntityState.Unchanged;
+
+                                    break;
+                                }
+                            case EntityState.Modified:
+                                {
+                                    entry.OriginalValues.SetValues(entry.CurrentValues);
+                                    entry.State = EntityState.Unchanged;
+
+                                    break;
+                                }
+                        }                        
                     }
                 }
             }
