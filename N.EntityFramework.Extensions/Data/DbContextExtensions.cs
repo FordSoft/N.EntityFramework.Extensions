@@ -469,24 +469,21 @@ namespace N.EntityFramework.Extensions
 
         private static int MyBulkUpdate<T>(this DbContext context, IEnumerable<T> entities, BulkUpdateOptions<T> options)
         {
+            var entitiesCount = entities.Count();
+
 #if CHECK_PERFOMANCE
             var stopwatch = Stopwatch.StartNew();
-            LogToDebug($"Start bulk update. Entities count: {entities.Count()}");
+            LogToDebug($"Start bulk update. Entities count: {entitiesCount}");
 #endif
 
             int rowsUpdated = 0;
             var outputRows = new List<BulkMergeOutputRow<T>>();
             var tableMapping = context.GetTableMapping(typeof(T));
             var dbConnection = context.GetSqlConnection();
-
             var transaction = context.Database.CurrentTransaction.UnderlyingTransaction as SqlTransaction;
-
+            var storeGeneratedColumnNames = new[] { options.PkColumnName };
             string stagingTableName = GetStagingTableName(tableMapping, options.UsePermanentTable, dbConnection);
             string destinationTableName = string.Format("[{0}].[{1}]", tableMapping.Schema, tableMapping.TableName);
-
-            // TODO
-            //
-            //string[] columnNames = tableMapping.Columns.Where(o => !o.Column.IsStoreGeneratedIdentity).Select(o => o.Column.Name).ToArray();
             string[] columnNames = tableMapping.Columns
                 .Select(o => o.Column.Name)
                 .ToArray();
@@ -494,16 +491,6 @@ namespace N.EntityFramework.Extensions
             {
                 columnNames = columnNames.Where(item => !options.IgnoreColumns.Contains(item, SqlUtil.StringIgnoreCaseEqualityComparer)).ToArray();
             }
-
-
-            // TODO
-            //
-            //string[] storeGeneratedColumnNames = tableMapping.Columns.Where(o => o.Column.IsStoreGeneratedIdentity).Select(o => o.Column.Name).ToArray();
-            string[] storeGeneratedColumnNames =
-                new[] { "Id" };
-            //tableMapping.Columns
-            //.Where(o => o.Column.IsStoreGeneratedIdentity || o.Column.IsStoreGeneratedComputed)
-            //.Select(o => o.Column.Name).ToArray();
 
             SqlUtil.CloneTable(
                 destinationTableName,
@@ -519,21 +506,31 @@ namespace N.EntityFramework.Extensions
                 columnNames.Where(o => !options.IgnoreColumnsOnUpdate.GetObjectProperties().Contains(o)));
 
             string updateSetExpression = string.Join(",", columnstoUpdate.Select(o => string.Format("t.{0}=s.{0}", o)));
-            string updateSql = string.Format("UPDATE t SET {0} FROM {1} AS s JOIN {2} AS t ON {3}; SELECT @@RowCount;",
-                updateSetExpression, stagingTableName, destinationTableName, CommonUtil<T>.GetJoinConditionSql(options.UpdateOnCondition, storeGeneratedColumnNames, "s", "t"));
+            string updateSql = string.Format(
+                "UPDATE t SET {0} FROM {1} AS s JOIN {2} AS t ON {3}; SELECT @@RowCount;",
+                updateSetExpression,
+                stagingTableName,
+                destinationTableName,
+                CommonUtil<T>.GetJoinConditionSql(options.UpdateOnCondition, storeGeneratedColumnNames, "s", "t"));
 
             rowsUpdated = SqlUtil.ExecuteSql(updateSql, dbConnection, transaction, options.CommandTimeout);
+
+            if (rowsUpdated > entitiesCount)
+            {
+                rowsUpdated = entitiesCount;
+            }
+
             SqlUtil.DeleteTable(stagingTableName, dbConnection, transaction, options.CommandTimeout);
 
             ClearEntityStateToUnchanged(context, entities);
 
 #if CHECK_PERFOMANCE
-            LogToDebug($"Finished bulk update. Entities count: {entities.Count()}", stopwatch.Elapsed);
+            LogToDebug($"Finished bulk update. Entities count: {entitiesCount}", stopwatch.Elapsed);
 #endif
-
-            // Why rowsUpdated is X * 2 ?
+            
             return rowsUpdated;
         }
+
         public static void Fetch<T>(this IQueryable<T> querable, Action<FetchResult<T>> action, Action<FetchOptions> optionsAction) where T : class, new()
         {
             Fetch(querable, action, optionsAction.Build());
