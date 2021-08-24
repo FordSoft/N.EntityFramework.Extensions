@@ -75,6 +75,53 @@ namespace N.EntityFramework.Extensions
             }
         }
 
+        public static int BulkDeleteCasted<T>(this DbContext context, List<object> entities, object options)
+            => MyBulkDelete(context, entities.Cast<T>(), options as BulkDeleteOptions<T>);
+
+        private static int MyBulkDelete<T>(this DbContext context, IEnumerable<T> entities, BulkDeleteOptions<T> options)
+        {
+            int entitiesCount = entities.Count();
+
+#if CHECK_PERFOMANCE
+            var stopwatch = Stopwatch.StartNew();
+            LogToDebug($"Start bulk delete. Entities count: {entitiesCount}");
+#endif
+
+            int rowsAffected = 0;
+            var tableMapping = context.GetTableMapping(typeof(T));
+
+            var dbConnection = context.GetSqlConnection();
+            var transaction = context.Database.CurrentTransaction.UnderlyingTransaction as SqlTransaction;
+
+            string stagingTableName = GetStagingTableName(tableMapping, options.UsePermanentTable, dbConnection);
+            string destinationTableName = string.Format("[{0}].[{1}]", tableMapping.Schema, tableMapping.TableName);
+            string[] keyColumnNames = options.DeleteOnCondition != null
+                ? CommonUtil<T>.GetColumns(options.DeleteOnCondition, new[] { "s" })
+                : new[] { options.PkColumnName };//tableMapping.Columns.Where(o => o.Column.IsStoreGeneratedIdentity).Select(o => o.Column.Name).ToArray();
+
+            SqlUtil.CloneTable(
+                destinationTableName,
+                stagingTableName,
+                keyColumnNames,
+                dbConnection,
+                transaction,
+                null,
+                options.CommandTimeout);
+            BulkInsert(entities, options, tableMapping, dbConnection, transaction, stagingTableName, keyColumnNames, SqlBulkCopyOptions.KeepIdentity);
+            string deleteSql = string.Format("DELETE t FROM {0} s JOIN {1} t ON {2}", stagingTableName, destinationTableName,
+                CommonUtil<T>.GetJoinConditionSql(options.DeleteOnCondition, keyColumnNames));
+            rowsAffected = SqlUtil.ExecuteSql(deleteSql, dbConnection, transaction, options.CommandTimeout);
+            SqlUtil.DeleteTable(stagingTableName, dbConnection, transaction, options.CommandTimeout);
+
+            ClearEntityStateToUnchanged(context, entities);
+
+#if CHECK_PERFOMANCE
+            LogToDebug($"Finished bulk delete. Entities count: {entitiesCount}", stopwatch.Elapsed);
+#endif
+
+            return rowsAffected;
+        }
+
         private static void Validate(TableMapping tableMapping)
         {
             if (tableMapping.Columns.Where(o => o.Column.IsStoreGeneratedIdentity).Count() == 0)
@@ -602,20 +649,20 @@ namespace N.EntityFramework.Extensions
                 foreach (var entity in entities)
                 {
                     var entry = dbContext.Entry(entity);
-                    if (entry.State == EntityState.Added || entry.State == EntityState.Modified)
+                    if (entry.State == EntityState.Modified || entry.State == EntityState.Added || entry.State == EntityState.Deleted)
                     {
                         switch (entry.State)
                         {
-                            case EntityState.Added:
-                            case EntityState.Deleted:
+                            case EntityState.Modified:
                                 {
+                                    entry.OriginalValues.SetValues(entry.CurrentValues);
                                     entry.State = EntityState.Unchanged;
 
                                     break;
                                 }
-                            case EntityState.Modified:
+                            case EntityState.Added:
+                            case EntityState.Deleted:
                                 {
-                                    entry.OriginalValues.SetValues(entry.CurrentValues);
                                     entry.State = EntityState.Unchanged;
 
                                     break;
