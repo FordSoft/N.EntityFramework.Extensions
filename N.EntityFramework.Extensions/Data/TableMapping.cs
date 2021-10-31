@@ -11,6 +11,7 @@ namespace N.EntityFramework.Extensions
         public EntitySet EntitySet { get; set; }
         public EntityType EntityType { get; set; }
         public List<ScalarPropertyMapping> Columns { get; set; }
+        public List<ConditionPropertyMapping> Conditions { get; set; }
         public string Schema { get; }
         public string TableName { get; }
         public string FullQualifedTableName
@@ -18,14 +19,21 @@ namespace N.EntityFramework.Extensions
             get { return string.Format("[{0}].[{1}]", this.Schema, this.TableName);  }
         }
 
-        public TableMapping(List<ScalarPropertyMapping> columns, EntitySet entitySet, EntityType entityType, EntitySetMapping mapping)
+        public TableMapping(
+            EntitySet entitySet, 
+            EntityType entityType, 
+            EntitySetMapping mapping,
+            List<ScalarPropertyMapping> columns, 
+            List<ConditionPropertyMapping> conditions)
         {
-            var storeEntitySet = mapping.EntityTypeMappings.Single().Fragments.Single().StoreEntitySet;
-            Columns = columns;
+            var storeEntitySet = mapping.EntityTypeMappings.First(o => o.EntityType != null && o.EntityType.Name == entityType.Name).Fragments.Single().StoreEntitySet;
+
             EntitySet = entitySet;
             EntityType = entityType;
             Mapping = mapping;
-            Schema = (string)storeEntitySet.MetadataProperties["Schema"].Value ?? storeEntitySet.Schema; 
+            Columns = columns;
+            Conditions = conditions;
+            Schema = (string)storeEntitySet.MetadataProperties["Schema"].Value ?? storeEntitySet.Schema;
             TableName = (string)storeEntitySet.MetadataProperties["Table"].Value ?? storeEntitySet.Name;
         }
     }

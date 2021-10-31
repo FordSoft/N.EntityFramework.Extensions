@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Data.Entity.Core.Mapping;
 using System.Linq.Expressions;
 
 namespace N.EntityFramework.Extensions
@@ -9,7 +10,7 @@ namespace N.EntityFramework.Extensions
     internal class EntityDataReader<T> : IDataReader
     {
         public TableMapping TableMapping { get; set; }
-        public Dictionary<long,T> EntityMap { get; set; }
+        public Dictionary<long, T> EntityMap { get; set; }
         private Dictionary<string, int> columnIndexes;
         private long currentId;
         private bool useInternalId;
@@ -17,6 +18,7 @@ namespace N.EntityFramework.Extensions
         private IEnumerable<T> entities;
         private IEnumerator<T> enumerator;
         private Dictionary<int, Func<T, object>> selectors;
+        private Dictionary<int, ConditionPropertyMapping> conditions;
 
         public EntityDataReader(TableMapping tableMapping, IEnumerable<T> entities, bool useInternalId)
         {
@@ -27,10 +29,11 @@ namespace N.EntityFramework.Extensions
             this.entities = entities;
             this.enumerator = entities.GetEnumerator();
             this.selectors = new Dictionary<int, Func<T, object>>();
+            this.conditions = new Dictionary<int, ConditionPropertyMapping>();
             this.EntityMap = new Dictionary<long, T>();
-            this.FieldCount = tableMapping.Columns.Count;
+            this.FieldCount = tableMapping.Columns.Count + tableMapping.Conditions.Count;
             this.TableMapping = tableMapping;
-            
+
 
             int i = 0;
             foreach (var column in tableMapping.Columns)
@@ -42,8 +45,14 @@ namespace N.EntityFramework.Extensions
                 columnIndexes[column.Property.Name] = i;
                 i++;
             }
-            
-            if(useInternalId)
+            foreach (var condition in TableMapping.Conditions)
+            {
+                conditions[i] = condition;
+                columnIndexes[condition.Column.Name] = i;
+                i++;
+            }
+
+            if (useInternalId)
             {
                 this.FieldCount++;
                 columnIndexes[Constants.InternalId_ColumnName] = i;
@@ -175,15 +184,15 @@ namespace N.EntityFramework.Extensions
 
         public object GetValue(int i)
         {
-            if(i == tableFieldCount)
+            if (useInternalId && i == this.FieldCount - 1)
             {
                 return this.currentId;
             }
             else
             {
-                return selectors[i](enumerator.Current);
+                return i < tableFieldCount ? selectors[i](enumerator.Current) : conditions[i].GetPrivateFieldValue("Value");
             }
-            
+
         }
 
         public int GetValues(object[] values)
@@ -204,7 +213,7 @@ namespace N.EntityFramework.Extensions
         public bool Read()
         {
             bool moveNext = enumerator.MoveNext();
-            
+
             if (moveNext && this.useInternalId)
             {
                 this.currentId++;
@@ -214,4 +223,3 @@ namespace N.EntityFramework.Extensions
         }
     }
 }
-

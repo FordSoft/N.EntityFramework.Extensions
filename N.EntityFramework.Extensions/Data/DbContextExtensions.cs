@@ -186,7 +186,12 @@ namespace N.EntityFramework.Extensions
                 SqlBulkCopyOptions.KeepIdentity,
                 true);
 
-            IEnumerable<string> columnsToInsert = columnNames;
+            List<string> columnsToInsert = columnNames.ToList();
+
+            if (tableMapping.Conditions?.Any() == true)
+            {
+                columnsToInsert.AddRange(tableMapping.Conditions.Select(item => item.Column.Name));
+            }
 
             List<string> columnsToOutput = new List<string> { "$Action", string.Format("{0}.{1}", "s", Constants.InternalId_ColumnName) };
             List<PropertyInfo> propertySetters = new List<PropertyInfo>();
@@ -256,7 +261,7 @@ namespace N.EntityFramework.Extensions
         }
 
         private static BulkInsertResult<T> BulkInsert<T>(IEnumerable<T> entities, BulkOptions options, TableMapping tableMapping, SqlConnection dbConnection, SqlTransaction transaction, string tableName,
-            string[] inputColumns = null, SqlBulkCopyOptions bulkCopyOptions = SqlBulkCopyOptions.Default, bool useInteralId = false)
+            string[] inputColumns = null, SqlBulkCopyOptions bulkCopyOptions = SqlBulkCopyOptions.Default, bool useInteralId = false, bool includeConditionColumns = true)
         {
 
 #if CHECK_PERFOMANCE
@@ -278,6 +283,13 @@ namespace N.EntityFramework.Extensions
             {
                 if (inputColumns == null || (inputColumns != null && inputColumns.Contains(column.Column.Name)))
                     sqlBulkCopy.ColumnMappings.Add(column.Property.Name, column.Column.Name);
+            }
+            if (includeConditionColumns)
+            {
+                foreach (var condition in dataReader.TableMapping.Conditions)
+                {
+                    sqlBulkCopy.ColumnMappings.Add(condition.Column.Name, condition.Column.Name);
+                }
             }
             if (useInteralId)
             {
@@ -1039,23 +1051,30 @@ namespace N.EntityFramework.Extensions
                             .GetItems<EntityContainer>(DataSpace.CSpace)
                                   .Single()
                                   .EntitySets
-                                  .Single(s => s.ElementType.Name == entityType.Name);
+                                  .Single(s => (s.ElementType.Name == entityType.Name)
+                                    || (entityType.BaseType != null && s.ElementType.Name == entityType.BaseType.Name));
 
             // Find the mapping between conceptual and storage model for this entity set
-            var mapping = metadata.GetItems<EntityContainerMapping>(DataSpace.CSSpace)
+            var mappings = metadata.GetItems<EntityContainerMapping>(DataSpace.CSSpace)
                                      .Single()
                                      .EntitySetMappings
                                      .Single(s => s.EntitySet == entitySet);
 
             // Find all properties (column) that are mapped
-            var columns = mapping
-                           .EntityTypeMappings.Single()
-                           .Fragments.Single()
-                           .PropertyMappings
-                           .OfType<ScalarPropertyMapping>()
-                           .ToList();
+            var columns = new List<ScalarPropertyMapping>();
+            var conditions = new List<ConditionPropertyMapping>();
+            foreach (var mapping in mappings.EntityTypeMappings
+                .Where(o => o.EntityType == null || o.EntityType.Name == entityType.Name))
+            {
+                foreach (var propertyMapping in mapping.Fragments.Single().PropertyMappings.OfType<ScalarPropertyMapping>().ToList())
+                {
+                    if (!columns.Any(o => o.Column == propertyMapping.Column))
+                        columns.Add(propertyMapping);
+                }
+                conditions.AddRange(mapping.Fragments.Single().Conditions);
+            }
 
-            return new TableMapping(columns, entitySet, entityType, mapping);
+            return new TableMapping(entitySet, entityType, mappings, columns, conditions);
         }
     }
 }
