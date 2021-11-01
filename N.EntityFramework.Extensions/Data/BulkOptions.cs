@@ -20,5 +20,7 @@ namespace N.EntityFramework.Extensions
         public List<string> IgnoreColumns { get; set; }
         
         public string PkColumnName { get; set; }
+
+        public string OperationId { get; set; }
     }
 }

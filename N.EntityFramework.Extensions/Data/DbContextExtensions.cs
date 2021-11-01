@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.Entity;
@@ -21,12 +22,34 @@ namespace N.EntityFramework.Extensions
 {
     public static partial class DbContextExtensions
     {
-        private static EfExtensionsCommandInterceptor efExtensionsCommandInterceptor;
         static DbContextExtensions()
         {
             efExtensionsCommandInterceptor = new EfExtensionsCommandInterceptor();
             DbInterception.Add(efExtensionsCommandInterceptor);
+
+            _typeTableMappings = new ConcurrentDictionary<Type, TableMapping>();
         }
+        
+        private static EfExtensionsCommandInterceptor efExtensionsCommandInterceptor;
+        private static ConcurrentDictionary<Type, TableMapping> _typeTableMappings;
+
+        internal static void LogToDebug(string operationId, string message, TimeSpan? by = null)
+        {
+            if (!Debugger.IsAttached)
+            {
+                return;
+            }
+
+            if (by.HasValue)
+            {
+                Debug.WriteLine($"{DateTime.Now.ToString("HH:mm:ss.fff")}; Bulk; {operationId}; {message}; {by}");
+            }
+            else
+            {
+                Debug.WriteLine($"{DateTime.Now.ToString("HH:mm:ss.fff")}; Bulk; {operationId}; {message}");
+            }
+        }
+
         public static int BulkDelete<T>(this DbContext context, IEnumerable<T> entities)
         {
             return context.BulkDelete(entities, new BulkDeleteOptions<T>());
@@ -54,7 +77,7 @@ namespace N.EntityFramework.Extensions
                     string[] keyColumnNames = options.DeleteOnCondition != null ? CommonUtil<T>.GetColumns(options.DeleteOnCondition, new[] { "s" })
                         : tableMapping.Columns.Where(o => o.Column.IsStoreGeneratedIdentity).Select(o => o.Column.Name).ToArray();
 
-                    SqlUtil.CloneTable(destinationTableName, stagingTableName, keyColumnNames, dbConnection, transaction, null, options.CommandTimeout);
+                    SqlUtil.CloneTable(destinationTableName, stagingTableName, keyColumnNames, dbConnection, transaction, options, null);
                     BulkInsert(entities, options, tableMapping, dbConnection, transaction, stagingTableName, keyColumnNames, SqlBulkCopyOptions.KeepIdentity);
                     string deleteSql = string.Format("DELETE t FROM {0} s JOIN {1} t ON {2}", stagingTableName, destinationTableName,
                         CommonUtil<T>.GetJoinConditionSql(options.DeleteOnCondition, keyColumnNames));
@@ -81,14 +104,13 @@ namespace N.EntityFramework.Extensions
         private static int MyBulkDelete<T>(this DbContext context, IEnumerable<T> entities, BulkDeleteOptions<T> options)
         {
             int entitiesCount = entities.Count();
+            int rowsAffected = 0;
+            var tableMapping = context.GetTableMapping(typeof(T));
 
 #if CHECK_PERFOMANCE
             var stopwatch = Stopwatch.StartNew();
-            LogToDebug($"Start bulk delete. Entities count: {entitiesCount}");
+            LogToDebug(options.OperationId, $"Start bulk delete '{tableMapping.FullQualifedTableName}'. Entities count: {entitiesCount}");
 #endif
-
-            int rowsAffected = 0;
-            var tableMapping = context.GetTableMapping(typeof(T));
 
             var dbConnection = context.GetSqlConnection();
             var transaction = context.Database.CurrentTransaction.UnderlyingTransaction as SqlTransaction;
@@ -97,7 +119,7 @@ namespace N.EntityFramework.Extensions
             string destinationTableName = string.Format("[{0}].[{1}]", tableMapping.Schema, tableMapping.TableName);
             string[] keyColumnNames = options.DeleteOnCondition != null
                 ? CommonUtil<T>.GetColumns(options.DeleteOnCondition, new[] { "s" })
-                : new[] { options.PkColumnName };//tableMapping.Columns.Where(o => o.Column.IsStoreGeneratedIdentity).Select(o => o.Column.Name).ToArray();
+                : new[] { options.PkColumnName };
 
             SqlUtil.CloneTable(
                 destinationTableName,
@@ -105,18 +127,18 @@ namespace N.EntityFramework.Extensions
                 keyColumnNames,
                 dbConnection,
                 transaction,
-                null,
-                options.CommandTimeout);
+                options,
+                null);
             BulkInsert(entities, options, tableMapping, dbConnection, transaction, stagingTableName, keyColumnNames, SqlBulkCopyOptions.KeepIdentity);
             string deleteSql = string.Format("DELETE t FROM {0} s JOIN {1} t ON {2}", stagingTableName, destinationTableName,
                 CommonUtil<T>.GetJoinConditionSql(options.DeleteOnCondition, keyColumnNames));
             rowsAffected = SqlUtil.ExecuteSql(deleteSql, dbConnection, transaction, options.CommandTimeout);
             SqlUtil.DeleteTable(stagingTableName, dbConnection, transaction, options.CommandTimeout);
 
-            ClearEntityStateToUnchanged(context, entities);
+            ClearEntityStateToUnchanged(context, entities, options);
 
 #if CHECK_PERFOMANCE
-            LogToDebug($"Finished bulk delete. Entities count: {entitiesCount}", stopwatch.Elapsed);
+            LogToDebug(options.OperationId, $"Finished bulk delete '{tableMapping.FullQualifedTableName}'. Entities count: {entitiesCount}", stopwatch.Elapsed);
 #endif
 
             return rowsAffected;
@@ -143,14 +165,15 @@ namespace N.EntityFramework.Extensions
 
         public static int BulkInsert<T>(this DbContext context, IEnumerable<T> entities, BulkInsertOptions<T> options)
         {
+            var tableMapping = context.GetTableMapping(typeof(T));
+            var dbConnection = context.GetSqlConnection();
+
 #if CHECK_PERFOMANCE
             var stopwatch = Stopwatch.StartNew();
-            LogToDebug($"Start bulk insert. Entities count: {entities.Count()}");
+            LogToDebug(options.OperationId, $"Start bulk insert to '{tableMapping.FullQualifedTableName}'. Entities count: {entities.Count()}");
 #endif
 
             int rowsAffected = 0;
-            var tableMapping = context.GetTableMapping(typeof(T));
-            var dbConnection = context.GetSqlConnection();
 
             var transaction = context.Database.CurrentTransaction.UnderlyingTransaction as SqlTransaction;
 
@@ -173,8 +196,8 @@ namespace N.EntityFramework.Extensions
                 null,
                 dbConnection,
                 transaction,
-                Common.Constants.InternalId_ColumnName,
-                options.CommandTimeout);
+                options,
+                Common.Constants.InternalId_ColumnName);
             var bulkInsertResult = BulkInsert(
                 entities,
                 options,
@@ -204,7 +227,7 @@ namespace N.EntityFramework.Extensions
             }
 
 #if CHECK_PERFOMANCE
-            LogToDebug($"Start merge in bulk insert. Entities count: {entities.Count()}", stopwatch.Elapsed);
+            LogToDebug(options.OperationId, $"Start merge in bulk insert to '{tableMapping.FullQualifedTableName}'. Entities count: {entities.Count()}", stopwatch.Elapsed);
 #endif
 
             string insertSqlText = string.Format("MERGE {0} t USING {1} s ON {2} WHEN NOT MATCHED THEN INSERT ({3}) VALUES ({3}){4};",
@@ -226,7 +249,7 @@ namespace N.EntityFramework.Extensions
             rowsAffected = bulkQueryResult.RowsAffected;
 
 #if CHECK_PERFOMANCE
-            LogToDebug($"Finished merge in bulk insert. Entities count: {entities.Count()}", stopwatch.Elapsed);
+            LogToDebug(options.OperationId, $"Finished merge in bulk insert to '{tableMapping.FullQualifedTableName}'. Entities count: {entities.Count()}", stopwatch.Elapsed);
 #endif
 
             if (options.AutoMapOutputIdentity)
@@ -247,15 +270,15 @@ namespace N.EntityFramework.Extensions
             }
 
 #if CHECK_PERFOMANCE
-            LogToDebug($"Finished deserialization inserted items in bulk insert. Entities count: {entities.Count()}", stopwatch.Elapsed);
+            LogToDebug(options.OperationId, $"Finished update fields inserted items in bulk insert for '{typeof(T).Name}'. Entities count: {entities.Count()}", stopwatch.Elapsed);
 #endif
 
             SqlUtil.DeleteTable(stagingTableName, dbConnection, transaction, options.CommandTimeout);
 
-            ClearEntityStateToUnchanged(context, entities);
+            ClearEntityStateToUnchanged(context, entities, options);
 
 #if CHECK_PERFOMANCE
-            LogToDebug($"Finished bulk insert. Entities count: {entities.Count()}", stopwatch.Elapsed);
+            LogToDebug(options.OperationId, $"Finished bulk insert to '{tableMapping.FullQualifedTableName}'. Entities count: {entities.Count()}", stopwatch.Elapsed);
 #endif
             return rowsAffected;
         }
@@ -266,7 +289,7 @@ namespace N.EntityFramework.Extensions
 
 #if CHECK_PERFOMANCE
             var stopwatch = Stopwatch.StartNew();
-            LogToDebug($"Start bulk insert to memory table. Entities count: {entities.Count()}");
+            LogToDebug(options.OperationId, $"Start bulk copy to memory table '{tableName}'. Entities count: {entities.Count()}");
 #endif
             var dataReader = new EntityDataReader<T>(tableMapping, entities, useInteralId);
 
@@ -298,7 +321,7 @@ namespace N.EntityFramework.Extensions
             sqlBulkCopy.WriteToServer(dataReader);
 
 #if CHECK_PERFOMANCE
-            LogToDebug($"Finished bulk insert to memory table. Entities count: {entities.Count()}", stopwatch.Elapsed);
+            LogToDebug(options.OperationId, $"Finished bulk copy to memory table '{tableName}'. Entities count: {entities.Count()}", stopwatch.Elapsed);
 #endif
 
             return new BulkInsertResult<T>
@@ -306,23 +329,6 @@ namespace N.EntityFramework.Extensions
                 RowsAffected = Convert.ToInt32(sqlBulkCopy.GetPrivateFieldValue("_rowsCopied")),
                 EntityMap = dataReader.EntityMap
             };
-        }
-
-        public static void LogToDebug(string message, TimeSpan? by = null)
-        {
-            if (!Debugger.IsAttached)
-            {
-                return;
-            }
-
-            if (by.HasValue)
-            {
-                Debug.WriteLine($"{DateTime.Now.ToString("HH:mm:ss.fff")}; {message}; {by}");
-            }
-            else
-            {
-                Debug.WriteLine($"{DateTime.Now.ToString("HH:mm:ss.fff")}; {message}");
-            }
         }
 
         public static BulkMergeResult<T> BulkMerge<T>(this DbContext context, IEnumerable<T> entities)
@@ -377,8 +383,8 @@ namespace N.EntityFramework.Extensions
                         null,
                         dbConnection,
                         transaction,
-                        Common.Constants.InternalId_ColumnName,
-                        options.CommandTimeout);
+                        options,
+                        Common.Constants.InternalId_ColumnName);
                     var bulkInsertResult = BulkInsert(entities, options, tableMapping, dbConnection, transaction, stagingTableName, null, SqlBulkCopyOptions.KeepIdentity, true);
 
                     IEnumerable<string> columnsToInsert = columnNames.Where(o => !options.GetIgnoreColumnsOnInsert().Contains(o));
@@ -493,8 +499,8 @@ namespace N.EntityFramework.Extensions
                         null,
                         dbConnection,
                         transaction,
-                        null,
-                        options.CommandTimeout);
+                        options,
+                        null);
                     BulkInsert(entities, options, tableMapping, dbConnection, transaction, stagingTableName, null, SqlBulkCopyOptions.KeepIdentity);
 
                     IEnumerable<string> columnstoUpdate = columnNames.Where(o => !options.IgnoreColumnsOnUpdate.GetObjectProperties().Contains(o));
@@ -529,16 +535,16 @@ namespace N.EntityFramework.Extensions
         private static int MyBulkUpdate<T>(this DbContext context, IEnumerable<T> entities, BulkUpdateOptions<T> options)
         {
             var entitiesCount = entities.Count();
+            var tableMapping = context.GetTableMapping(typeof(T));
+            var dbConnection = context.GetSqlConnection();
 
 #if CHECK_PERFOMANCE
             var stopwatch = Stopwatch.StartNew();
-            LogToDebug($"Start bulk update. Entities count: {entitiesCount}");
+            LogToDebug(options.OperationId, $"Start bulk update '{tableMapping.FullQualifedTableName}'. Entities count: {entitiesCount}");
 #endif
 
             int rowsUpdated = 0;
             var outputRows = new List<BulkMergeOutputRow<T>>();
-            var tableMapping = context.GetTableMapping(typeof(T));
-            var dbConnection = context.GetSqlConnection();
             var transaction = context.Database.CurrentTransaction.UnderlyingTransaction as SqlTransaction;
             var storeGeneratedColumnNames = new[] { options.PkColumnName };
             string stagingTableName = GetStagingTableName(tableMapping, options.UsePermanentTable, dbConnection);
@@ -557,8 +563,8 @@ namespace N.EntityFramework.Extensions
                 null,
                 dbConnection,
                 transaction,
-                null,
-                options.CommandTimeout);
+                options,
+                null);
             BulkInsert(entities, options, tableMapping, dbConnection, transaction, stagingTableName, null, SqlBulkCopyOptions.KeepIdentity);
 
             IEnumerable<string> columnstoUpdate = SqlUtil.ReplaceReservedKeywords(
@@ -581,10 +587,10 @@ namespace N.EntityFramework.Extensions
 
             SqlUtil.DeleteTable(stagingTableName, dbConnection, transaction, options.CommandTimeout);
 
-            ClearEntityStateToUnchanged(context, entities);
+            ClearEntityStateToUnchanged(context, entities, options);
 
 #if CHECK_PERFOMANCE
-            LogToDebug($"Finished bulk update. Entities count: {entitiesCount}", stopwatch.Elapsed);
+            LogToDebug(options.OperationId, $"Finished bulk update '{tableMapping.FullQualifedTableName}'. Entities count: {entitiesCount}", stopwatch.Elapsed);
 #endif
             
             return rowsUpdated;
@@ -645,12 +651,12 @@ namespace N.EntityFramework.Extensions
             reader.Close();
         }
 
-        private static void ClearEntityStateToUnchanged<T>(DbContext dbContext, IEnumerable<T> entities)
+        private static void ClearEntityStateToUnchanged<T>(DbContext dbContext, IEnumerable<T> entities, BulkOptions bulkOptions)
         {
 
 #if CHECK_PERFOMANCE
             var stopwatch = Stopwatch.StartNew();
-            LogToDebug($"Start clear entity state. Entities count: {entities.Count()}");
+            LogToDebug(bulkOptions.OperationId, $"Start clear entity state. Entities count: {entities.Count()}");
 #endif
             bool autoDetectCahngesEnabled = dbContext.Configuration.AutoDetectChangesEnabled;
             
@@ -689,7 +695,7 @@ namespace N.EntityFramework.Extensions
             }
 
 #if CHECK_PERFOMANCE
-            LogToDebug($"Finished clear entity state. Entities count: {entities.Count()}", stopwatch.Elapsed);
+            LogToDebug(bulkOptions.OperationId, $"Finished clear entity state. Entities count: {entities.Count()}", stopwatch.Elapsed);
 #endif
 
         }
@@ -1034,47 +1040,51 @@ namespace N.EntityFramework.Extensions
         {
             return context.Database.Connection as SqlConnection;
         }
+
         public static TableMapping GetTableMapping(this IObjectContextAdapter context, Type type)
         {
-            var metadata = context.ObjectContext.MetadataWorkspace;
-
-            // Get the part of the model that contains info about the actual CLR types
-            var objectItemCollection = ((ObjectItemCollection)metadata.GetItemCollection(DataSpace.OSpace));
-
-            // Get the entity type from the model that maps to the CLR type
-            var entityType = metadata
-                                .GetItems<EntityType>(DataSpace.OSpace)
-                                      .Single(e => objectItemCollection.GetClrType(e) == type);
-
-            // Get the entity set that uses this entity type
-            var entitySet = metadata
-                            .GetItems<EntityContainer>(DataSpace.CSpace)
-                                  .Single()
-                                  .EntitySets
-                                  .Single(s => (s.ElementType.Name == entityType.Name)
-                                    || (entityType.BaseType != null && s.ElementType.Name == entityType.BaseType.Name));
-
-            // Find the mapping between conceptual and storage model for this entity set
-            var mappings = metadata.GetItems<EntityContainerMapping>(DataSpace.CSSpace)
-                                     .Single()
-                                     .EntitySetMappings
-                                     .Single(s => s.EntitySet == entitySet);
-
-            // Find all properties (column) that are mapped
-            var columns = new List<ScalarPropertyMapping>();
-            var conditions = new List<ConditionPropertyMapping>();
-            foreach (var mapping in mappings.EntityTypeMappings
-                .Where(o => o.EntityType == null || o.EntityType.Name == entityType.Name))
+            return _typeTableMappings.GetOrAdd(type, (key) =>
             {
-                foreach (var propertyMapping in mapping.Fragments.Single().PropertyMappings.OfType<ScalarPropertyMapping>().ToList())
-                {
-                    if (!columns.Any(o => o.Column == propertyMapping.Column))
-                        columns.Add(propertyMapping);
-                }
-                conditions.AddRange(mapping.Fragments.Single().Conditions);
-            }
+                var metadata = context.ObjectContext.MetadataWorkspace;
 
-            return new TableMapping(entitySet, entityType, mappings, columns, conditions);
+                // Get the part of the model that contains info about the actual CLR types
+                var objectItemCollection = ((ObjectItemCollection)metadata.GetItemCollection(DataSpace.OSpace));
+
+                // Get the entity type from the model that maps to the CLR type
+                var entityType = metadata
+                                    .GetItems<EntityType>(DataSpace.OSpace)
+                                          .Single(e => objectItemCollection.GetClrType(e) == type);
+
+                // Get the entity set that uses this entity type
+                var entitySet = metadata
+                                .GetItems<EntityContainer>(DataSpace.CSpace)
+                                      .Single()
+                                      .EntitySets
+                                      .Single(s => (s.ElementType.Name == entityType.Name)
+                                        || (entityType.BaseType != null && s.ElementType.Name == entityType.BaseType.Name));
+
+                // Find the mapping between conceptual and storage model for this entity set
+                var mappings = metadata.GetItems<EntityContainerMapping>(DataSpace.CSSpace)
+                                         .Single()
+                                         .EntitySetMappings
+                                         .Single(s => s.EntitySet == entitySet);
+
+                // Find all properties (column) that are mapped
+                var columns = new List<ScalarPropertyMapping>();
+                var conditions = new List<ConditionPropertyMapping>();
+                foreach (var mapping in mappings.EntityTypeMappings
+                    .Where(o => o.EntityType == null || o.EntityType.Name == entityType.Name))
+                {
+                    foreach (var propertyMapping in mapping.Fragments.Single().PropertyMappings.OfType<ScalarPropertyMapping>().ToList())
+                    {
+                        if (!columns.Any(o => o.Column == propertyMapping.Column))
+                            columns.Add(propertyMapping);
+                    }
+                    conditions.AddRange(mapping.Fragments.Single().Conditions);
+                }
+
+                return new TableMapping(entitySet, entityType, mappings, columns, conditions);
+            });
         }
     }
 }

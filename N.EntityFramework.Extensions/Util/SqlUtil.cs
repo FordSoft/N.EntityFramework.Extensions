@@ -77,23 +77,23 @@ namespace N.EntityFramework.Extensions
             string destinationTable, 
             string[] columnNames, 
             SqlConnection connection, 
-            SqlTransaction transaction, 
-            string internalIdColumnName = null,
-            int? commandTimeout = null)
+            SqlTransaction transaction,
+            BulkOptions bulkOptions, 
+            string internalIdColumnName = null)
         {
 
 #if CHECK_PERFOMANCE
             var stopwatch = Stopwatch.StartNew();
-            DbContextExtensions.LogToDebug($"Start clone table. Source table name '{sourceTable}', destination table name '{destinationTable}'");
+            DbContextExtensions.LogToDebug(bulkOptions.OperationId, $"Start clone table. From '{sourceTable}' to '{destinationTable}'");
 #endif
 
             string columns = columnNames != null && columnNames.Length > 0 ? ConvertToColumnString(columnNames) : "*";
             columns = !string.IsNullOrEmpty(internalIdColumnName) ? string.Format("{0},CAST( NULL AS INT) AS {1}",columns, internalIdColumnName) : columns;
 
-            var result = ExecuteSql(string.Format("SELECT TOP 0 {0} INTO {1} FROM {2}", columns, destinationTable, sourceTable), connection, transaction, commandTimeout);
+            var result = ExecuteSql(string.Format("SELECT TOP 0 {0} INTO {1} FROM {2}", columns, destinationTable, sourceTable), connection, transaction, bulkOptions.CommandTimeout);
 
 #if CHECK_PERFOMANCE
-            DbContextExtensions.LogToDebug($"Finished clone table. Source table name '{sourceTable}', destination table name '{destinationTable}'", stopwatch.Elapsed);
+            DbContextExtensions.LogToDebug(bulkOptions.OperationId, $"Finished clone table. From '{sourceTable}' to '{destinationTable}'", stopwatch.Elapsed);
 #endif
             return result;
 
