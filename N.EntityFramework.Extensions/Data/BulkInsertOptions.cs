@@ -7,8 +7,12 @@ namespace N.EntityFramework.Extensions
 {
     public class BulkInsertOptions<T> : BulkOptions
     {
-        public string[] IgnoreColumns { get; set; }
-        
+        public BulkInsertOptions() : base()
+        {
+            this.AutoMapOutputIdentity = true;
+            this.InsertIfNotExists = false;
+        }
+
         public Expression<Func<T, object>> InputColumns { get; set; }
         public bool AutoMapOutputIdentity { get; set; }
         public bool KeepIdentity { get; set; }
@@ -18,12 +22,6 @@ namespace N.EntityFramework.Extensions
         public string[] GetInputColumns()
         {
             return this.InputColumns == null ? null : this.InputColumns.Body.Type.GetProperties().Select(o => o.Name).ToArray();
-        }
-
-        public BulkInsertOptions()
-        {
-            this.AutoMapOutputIdentity = true;
-            this.InsertIfNotExists = false;
         }
     }
 }
