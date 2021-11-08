@@ -289,7 +289,7 @@ namespace N.EntityFramework.Extensions
 
 #if CHECK_PERFOMANCE
             var stopwatch = Stopwatch.StartNew();
-            LogToDebug(options.OperationId, $"Start bulk copy to memory table '{tableName}'. Entities count: {entities.Count()}");
+            LogToDebug(options.OperationId, $"Start copy to memory table '{tableName}'. Entities count: {entities.Count()}");
 #endif
             var dataReader = new EntityDataReader<T>(tableMapping, entities, useInteralId);
 
@@ -321,7 +321,7 @@ namespace N.EntityFramework.Extensions
             sqlBulkCopy.WriteToServer(dataReader);
 
 #if CHECK_PERFOMANCE
-            LogToDebug(options.OperationId, $"Finished bulk copy to memory table '{tableName}'. Entities count: {entities.Count()}", stopwatch.Elapsed);
+            LogToDebug(options.OperationId, $"Finished copy to memory table '{tableName}'. Entities count: {entities.Count()}", stopwatch.Elapsed);
 #endif
 
             return new BulkInsertResult<T>
@@ -681,8 +681,22 @@ namespace N.EntityFramework.Extensions
                             case EntityState.Added:
                             case EntityState.Deleted:
                                 {
-                                    entry.State = EntityState.Unchanged;
+                                    try
+                                    {
+                                        entry.State = EntityState.Unchanged;
 
+                                    }
+                                    catch (Exception exception)
+                                    {
+                                        if (exception.Message.Contains("The relationship could not be changed because one or more of the foreign-key properties is non-nullable"))
+                                        {
+                                            entry.State = EntityState.Detached;
+                                            continue;
+                                        }
+
+                                        throw;
+                                    }
+                                    
                                     break;
                                 }
                         }                        
