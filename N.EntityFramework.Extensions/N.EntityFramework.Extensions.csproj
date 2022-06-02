@@ -13,6 +13,18 @@
   <PropertyGroup Condition="'$(Configuration)|$(TargetFramework)|$(Platform)'=='Debug|net45|AnyCPU'">
     <DefineConstants>TRACE;CHECK_PERFOMANCE</DefineConstants>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(TargetFramework)|$(Platform)'=='Debug|net452|AnyCPU'">
+    <DefineConstants>$(DefineConstants)TRACE;CHECK_PERFOMANCE</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(TargetFramework)|$(Platform)'=='Release|net452|AnyCPU'">
+    <DefineConstants>$(DefineConstants)TRACE;CHECK_PERFOMANCE</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(TargetFramework)|$(Platform)'=='Debug|netstandard2.1|AnyCPU'">
+    <DefineConstants>$(DefineConstants)TRACE;CHECK_PERFOMANCE</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(TargetFramework)|$(Platform)'=='Release|netstandard2.1|AnyCPU'">
+    <DefineConstants>$(DefineConstants)TRACE;CHECK_PERFOMANCE</DefineConstants>
+  </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="EntityFramework" Version="6.4.4" />
     <PackageReference Include="Microsoft.CSharp" Version="4.7.0" />

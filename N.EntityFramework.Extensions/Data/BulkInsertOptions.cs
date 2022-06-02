@@ -9,8 +9,8 @@ namespace N.EntityFramework.Extensions
     {
         public BulkInsertOptions() : base()
         {
-            this.AutoMapOutputIdentity = true;
-            this.InsertIfNotExists = false;
+            AutoMapOutputIdentity = true;
+            InsertIfNotExists = false;
         }
 
         public Expression<Func<T, object>> InputColumns { get; set; }
