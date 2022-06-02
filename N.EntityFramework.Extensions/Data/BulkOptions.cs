@@ -7,6 +7,7 @@ namespace N.EntityFramework.Extensions
         public BulkOptions()
         {
             IgnoreColumns = new List<string>();
+            ClearChangeTracker = true;
         }
 
         public int BatchSize { get; set; }
@@ -22,5 +23,7 @@ namespace N.EntityFramework.Extensions
         public string PkColumnName { get; set; }
 
         public string OperationId { get; set; }
+
+        public bool ClearChangeTracker { get; set; }
     }
 }

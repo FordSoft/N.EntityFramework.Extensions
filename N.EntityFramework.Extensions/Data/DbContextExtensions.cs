@@ -275,7 +275,10 @@ namespace N.EntityFramework.Extensions
 
             SqlUtil.DeleteTable(stagingTableName, dbConnection, transaction, options.CommandTimeout);
 
-            ClearEntityStateToUnchanged(context, entities, options);
+            if (options.ClearChangeTracker)
+            {
+                ClearEntityStateToUnchanged(context, entities, options);
+            }
 
 #if CHECK_PERFOMANCE
             LogToDebug(options.OperationId, $"Finished bulk insert to '{tableMapping.FullQualifedTableName}'. Entities count: {entities.Count()}", stopwatch.Elapsed);
