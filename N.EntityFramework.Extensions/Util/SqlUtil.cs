@@ -88,7 +88,7 @@ namespace N.EntityFramework.Extensions
 #endif
 
             string columns = columnNames != null && columnNames.Length > 0 ? ConvertToColumnString(columnNames) : "*";
-            columns = !string.IsNullOrEmpty(internalIdColumnName) ? string.Format("{0},CAST( NULL AS INT) AS {1}",columns, internalIdColumnName) : columns;
+            columns = !string.IsNullOrWhiteSpace(internalIdColumnName) ? string.Format("{0},CAST( NULL AS INT) AS {1}",columns, internalIdColumnName) : columns;
 
             var result = ExecuteSql(string.Format("SELECT TOP 0 {0} INTO {1} FROM {2}", columns, destinationTable, sourceTable), connection, transaction, bulkOptions.CommandTimeout);
 
